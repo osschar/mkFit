@@ -405,7 +405,7 @@ std::vector<double> runBtpCe_MultiIter(Event& ev, const EventOfHits &eoh, MkBuil
     }
 
     if ( ! itconf.m_require_quality_filter)
-      StdSeq::clean_cms_seedtracks_iter(&seeds, itconf);
+      StdSeq::clean_cms_seedtracks_iter(&seeds, itconf, &eoh, &ev.simHitsInfo_);
     
     // Add protection in case no seeds are found for iteration
     if (seeds.size() <= 0)

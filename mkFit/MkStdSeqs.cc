@@ -102,7 +102,8 @@ void Cmssw_ReMap_TrackHitIndices(const EventOfHits &eoh, TrackVec &out_tracks)
 //=========================================================================
 // Seed cleaning (multi-iter)
 //=========================================================================
-int clean_cms_seedtracks_iter(TrackVec *seed_ptr, const IterationConfig& itrcfg)
+int clean_cms_seedtracks_iter(TrackVec *seed_ptr, const IterationConfig& itrcfg,
+        const EventOfHits *eohp, const MCHitInfoVec* simhitinfop)
 { 
   const float etamax_brl = Config::c_etamax_brl;
   const float dpt_brl_0  = Config::c_dpt_brl_0;
@@ -186,9 +187,26 @@ int clean_cms_seedtracks_iter(TrackVec *seed_ptr, const IterationConfig& itrcfg)
 
     // To study some more details -- need EventOfHits for this
     int  n_ovlp_hits_added = 0;
-    // int  n_ovlp_hits_same_module = 0;
-    // int  n_ovlp_hits_shared = 0;
-    // int  n_ovlp_tracks = 0;
+    int  n_ovlp_hits_same_module = 0, n_ovlp_hits_same_module_good = 0, n_ovlp_hits_same_module_bad = 0;
+    int  n_ovlp_hits_shared = 0;
+    int  n_ovlp_tracks = 0;
+    int  n_ovlp_hits_good = 0;
+    int  n_ovlp_hits_bad = 0;
+    int  n_orig_hits_good = 0;
+    int  n_orig_hits_bad = 0;
+
+    { Track &t = seeds[ts];
+      // printf(" %d %f %f %f %d %d\n", ts, t.pT(), t.momEta(), t.momPhi(), t.label(), t.nTotalHits());
+      for (int i = 0; i < t.nTotalHits(); ++i)
+      {
+        const Hit &h = (*eohp)[t.getHitLyr(i)].GetHit(t.getHitIdx(i));
+        int hlbl = h.mcTrackID(*simhitinfop);
+        // printf("   %d %d %d %d\n", i, t.getHitLyr(i), t.getHitIdx(i), hlbl);
+
+        bool goodp = t.label() >= 0 && t.label() == hlbl;
+        ++(goodp ? n_orig_hits_good : n_orig_hits_bad);
+      }
+    }
 
     //#pragma simd /* Vectorization via simd had issues with icc */
     for (int tss= ts+1; tss<ns; tss++)
@@ -266,27 +284,76 @@ int clean_cms_seedtracks_iter(TrackVec *seed_ptr, const IterationConfig& itrcfg)
         //We are not actually fitting to the extra hits; use chi2 of 0
         float fakeChi2 = 0.0;
 
+        ++n_ovlp_tracks;
+
         for (int j = 0; j < tk2.nTotalHits(); ++j)
         {
           int hitidx = tk2.getHitIdx(j);
           int hitlyr = tk2.getHitLyr(j);
           if (hitidx >= 0)
           {
+            auto &ht2 = (*eohp)[hitlyr].GetHit(hitidx);
+            bool same_module = false;
             bool unique = true;
             for (int i = 0; i < tk.nTotalHits(); ++i)
             {
               if ((hitidx == tk.getHitIdx(i)) && (hitlyr == tk.getHitLyr(i)))
+              {
                 unique = false;
+              }
+              else
+              {
+                if (hitlyr == tk.getHitLyr(i))
+                {
+                  auto &ht = (*eohp)[ tk.getHitLyr(i) ].GetHit( tk.getHitIdx(i) );
+                  if (ht.detIDinLayer() == ht2.detIDinLayer())
+                  {
+                    same_module = true;
+                  }
+                }
+              }
             }
             if (unique) {
               tk.addHitIdx(tk2.getHitIdx(j), tk2.getHitLyr(j), fakeChi2);
               ++n_ovlp_hits_added;
+
+              bool goodp = tk.label() >= 0  &&  tk.label() == ht2.mcTrackID(*simhitinfop);
+
+              ++(goodp ? n_ovlp_hits_good : n_ovlp_hits_bad);
+
+              if (same_module)
+              {
+                ++n_ovlp_hits_same_module;
+                ++(goodp ? n_ovlp_hits_same_module_good : n_ovlp_hits_same_module_bad);
+              }
+
+            } else {
+                ++n_ovlp_hits_shared;
             }
+
           }
         }
       }
 
     } //end of inner loop over tss
+
+    assert (writetrack[ts] && "This is always true or what?");
+
+    // SEEDMRG
+    // ./mkFit ... | perl -ne 'if (/^SEEDMRG/) { s/^SEEDMRG //og; print; }' > smrg.rtt
+    if (seeds[ts].label() >= 0)
+    {
+      static bool first = true;
+      if (first) {
+        printf("SEEDMRG iter/I:pt/F:eta/F:phi/F:label/F:"
+               "n_orig_hits/I:n_orig_hits_good/I:n_orig_hits_bad/I:n_ovlp_tracks/I:n_ovlp_hits_added/I:n_ovlp_hits_good/I:n_ovlp_hits_bad/I:"
+               "n_ovlp_hits_same_module/I:n_ovlp_hits_same_module_good/I:n_ovlp_hits_same_module_bad/I:n_ovlp_hits_shared/I\n");
+        first = false;
+      }
+      Track &t = seeds[ts];
+      printf("SEEDMRG %d %f %f %f %d ", itrcfg.m_iteration_index, t.pT(), t.momEta(), t.momPhi(), t.label());
+      printf("%d %d %d %d %d %d %d %d %d %d %d\n", n_orig_hits_good + n_orig_hits_bad, n_orig_hits_good, n_orig_hits_bad, n_ovlp_tracks, n_ovlp_hits_added, n_ovlp_hits_good, n_ovlp_hits_bad, n_ovlp_hits_same_module, n_ovlp_hits_same_module_good, n_ovlp_hits_same_module_bad, n_ovlp_hits_shared);
+    }
 
     if (writetrack[ts])
     {
